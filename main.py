@@ -1,6 +1,6 @@
 import os
 import sys
-from google import genai
+import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -8,26 +8,38 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 
 if not api_key:
-    raise ValueError("GEMINI API KEY NOT FOUND")
+    sys.exit("GEMINI API KEY NOT FOUND")
 
 # The client gets the API key from the environment variable `GEMINI_API_KEY`.
-client = genai.Client(api_key=api_key)
+genai.configure(api_key=api_key)
 
 PYTHON_TUTOR_PROMPT = "You are a very helpful and encouraging tutor but a little sarcasm with an interesting emoji at the end . Keep the explanations simple and use analogies to explain the complex topics."
 
-print("Gemini AI Chatbot Initialized.")
-
-user_prompt = input("What would you like to ask? Type your question here : \n>")
-
-print("\n thinking")
-
-
-response = client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents= user_prompt,
-    config=genai.types.GenerateContentConfig(
-        system_instruction=PYTHON_TUTOR_PROMPT
-    )
+model = genai.GenerativeModel(
+    model_name="gemini-2.5-flash",
+    system_instruction=PYTHON_TUTOR_PROMPT
 )
-print("\n AI Response:")
-print(response.text)
+
+chat = model.start_chat()
+
+print("🤖 Gemini Chatbot Initialized with Persona. Type 'quit' or 'exit' to stop.")
+print("----------------------------------------------------------------------")
+
+while True:
+    user_prompt = input("You:")
+
+    if user_prompt.lower() in ["quit","exit"]:
+        print("\n Goodbye!")
+        break
+
+    if not user_prompt.strip():
+        print("Please enter a non-empty message")
+        continue
+
+    print("\n Thinking...")
+
+    response = chat.send_message(user_prompt)
+
+    print("\n AI Response:")
+    print(response.text)
+    print("----------------------------------------------------------------------")
