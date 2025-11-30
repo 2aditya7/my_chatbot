@@ -1,0 +1,7 @@
+User Experience (UX) Non-Functional Requirements Policy:
+
+1. Response Time: All user-facing application screens must load fully within 3 seconds, even during peak usage.
+2. Accessibility: All interfaces must conform to WCAG 2.1 Level AA standards.
+3. Language: All user-facing text must use simple, accessible language (7th-grade reading level max).
+4. Error Handling: All error messages must be descriptive and provide actionable recovery steps to the user.
+5. Branding: The corporate logo must be visible in the top-left corner of every application screen.

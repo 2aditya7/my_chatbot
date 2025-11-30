@@ -2,3 +2,8 @@ google-genai
 python-dotenv
 fastapi
 uvicorn
+streamlit
+langchain
+langchain-google-genai
+pydantic
+chromadb
