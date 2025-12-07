@@ -1,95 +1,77 @@
-# services/rag_service.py (DO NOT CHANGE - Final RAG Indexer)
+# services/rag_service.py
 import os
 import sys
 from dotenv import load_dotenv
 
-load_dotenv() 
+load_dotenv()
 
-# --- CORRECTED IMPORTS ---
-from langchain_google_genai import GoogleGenerativeAIEmbeddings 
-from langchain_text_splitters import CharacterTextSplitter 
+# Modern LangChain-like imports (adapt to your installed libs)
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_text_splitters import CharacterTextSplitter
 from langchain_community.document_loaders import TextLoader
-from langchain_chroma import Chroma 
+from langchain_chroma import Chroma
 
-# --- 1. CONFIGURATION ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-KNOWLEDGE_DIR = os.path.join(BASE_DIR, '..', 'knowledge_base') 
+KNOWLEDGE_DIR = os.path.join(BASE_DIR, '..', 'knowledge_base')
 COLLECTION_NAME = "ba_knowledge_base"
+PERSIST_DIR = os.path.join(BASE_DIR, '..', 'chroma_db')
 
-# --- 2. EMBEDDING MODEL INITIALIZATION ---
-EMBEDDINGS = None 
-GEMINI_KEY = os.getenv("GEMINI_API_KEY") 
-
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_KEY:
-    print("\n" + "="*50)
-    print("CRITICAL ERROR: GEMINI_API_KEY not found in .env file.")
-    print("Please ensure your .env file has GEMINI_API_KEY=\"YOUR_KEY\"")
-    print("="*50 + "\n")
+    print("CRITICAL ERROR: GEMINI_API_KEY missing in .env")
     sys.exit(1)
 
 try:
-    # Fix: Pass the key explicitly to the constructor
     EMBEDDINGS = GoogleGenerativeAIEmbeddings(
         model="text-embedding-004",
-        google_api_key=GEMINI_KEY 
+        google_api_key=GEMINI_KEY
     )
 except Exception as e:
-    print("\n" + "="*50)
-    print("CRITICAL ERROR: Failed to initialize Gemini Embeddings.")
-    print(f"Original Error: {e}")
-    print("="*50 + "\n")
+    print("Failed to initialize embeddings:", e)
     sys.exit(1)
 
-
-# --- 3. INDEXING FUNCTION ---
 def index_knowledge_base():
-    """Loads documents, splits them into chunks, and stores them in ChromaDB."""
     if not os.path.exists(KNOWLEDGE_DIR):
-        print(f"Error: Knowledge base directory not found at {KNOWLEDGE_DIR}")
+        print(f"Knowledge base not found at {KNOWLEDGE_DIR}")
         return
-        
+
     documents = []
-    for file in os.listdir(KNOWLEDGE_DIR):
-        if file.endswith(".txt"):
-            loader = TextLoader(os.path.join(KNOWLEDGE_DIR, file))
+    for fname in os.listdir(KNOWLEDGE_DIR):
+        if fname.endswith(".txt"):
+            loader = TextLoader(os.path.join(KNOWLEDGE_DIR, fname))
             documents.extend(loader.load())
 
     if not documents:
-        print("No documents found to index.")
+        print("No .txt docs found to index.")
         return
 
-    text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=0)
-    docs = text_splitter.split_documents(documents)
+    splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    chunks = splitter.split_documents(documents)
 
-    print(f"Indexing {len(docs)} document chunks into ChromaDB...")
-    Chroma.from_documents(
-        docs, 
-        EMBEDDINGS, 
+    vectordb = Chroma.from_documents(
+        chunks,
+        EMBEDDINGS,
         collection_name=COLLECTION_NAME,
-        persist_directory="./chroma_db" 
-    ).persist()
+        persist_directory=PERSIST_DIR
+    )
+    vectordb.persist()
+    print("Indexing complete.")
 
-    print("Indexing complete. Vector store saved.")
-
-# --- 4. RETRIEVAL FUNCTION (The R in RAG) ---
 def get_retriever():
-    """Loads the persistent vector store and returns a retriever."""
-    if not os.path.exists("./chroma_db"):
-        print("CRITICAL: Vector store not found. Running initial indexing...")
+    if not os.path.exists(PERSIST_DIR):
+        print("Vector store not found; running indexing...")
         index_knowledge_base()
-        
+
     try:
-        vectorstore = Chroma(
+        vectordb = Chroma(
             collection_name=COLLECTION_NAME,
             embedding_function=EMBEDDINGS,
-            persist_directory="./chroma_db"
+            persist_directory=PERSIST_DIR
         )
-        
-        return vectorstore.as_retriever(search_kwargs={"k": 2})
+        return vectordb.as_retriever(search_kwargs={"k": 3})
     except Exception as e:
-        print(f"Error loading ChromaDB retriever: {e}")
+        print("Error loading Chroma retriever:", e)
         return None
 
-# --- 5. INITIAL RUN ---
 if __name__ == "__main__":
     index_knowledge_base()
