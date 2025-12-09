@@ -6,8 +6,6 @@ services:
     container_name: ba_chatbot
     ports:
       - "8000:8000"
-    volumes:
-      - .:/app
     environment:
       - OLLAMA_API_URL=http://ollama:11434
       - GEMINI_API_KEY=${GEMINI_API_KEY}
