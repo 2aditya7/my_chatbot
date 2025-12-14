@@ -22,7 +22,6 @@ class OllamaChatService:
         self.retriever = retriever
         self.is_brd_mode = False
         
-    # PROMPT FOR GATHERING (Asking Questions)
     GATHERING_PROMPT = """You are a Senior Business Analyst conducting a requirements gathering session.
 
 CRITICAL RULES:
@@ -30,6 +29,7 @@ CRITICAL RULES:
 2. Questions must end naturally (no mid-sentence cutting)
 3. Wait for user's answer before asking next question
 4. After gathering enough information (8-10 exchanges), suggest creating a BRD
+5. Also, if user asks you for some suggestions about features of the business, you have to respond by giving the user some relevant suggestions related to features that can be added to the business.
 
 CONVERSATION STRATEGY:
 Phase 1: Ask about business idea, problem, value proposition
@@ -52,7 +52,6 @@ When you have gathered sufficient information, say:
 
 Now, based on the conversation history below, ask ONE appropriate question."""
 
-    # PROMPT FOR BRD TRANSITION
     BRD_TRANSITION_PROMPT = """You are a Senior Business Analyst. The user has requested to generate a Business Requirements Document (BRD).
 
 Respond by:
@@ -83,39 +82,34 @@ Now respond to the user's request to generate a BRD."""
 
     def _clean_question(self, response: str) -> str:
         """Clean and format response to ensure it's a single complete question"""
-        # Remove numbered lists
+
         response = re.sub(r'\d+\.\s*', '', response)
-        
-        # Split into sentences
+
         sentences = re.split(r'(?<=[.!?])\s+', response.strip())
         
         if not sentences:
             return "Could you tell me more about your business idea?"
         
-        # Find the first sentence that looks like a question
         for i, sentence in enumerate(sentences):
             sentence = sentence.strip()
             if not sentence:
                 continue
             
-            # If it ends with ?, it's already a question
             if sentence.endswith('?'):
-                # Ensure it's not cut off mid-sentence
+
                 words = sentence.split()
-                if len(words) < 3:  # Too short, probably incomplete
+                if len(words) < 3:  
                     continue
                 return sentence
             
-            # If it contains question words but no ?, add ?
             question_words = ['what', 'who', 'where', 'when', 'why', 'how', 'which', 'can', 'could', 'would', 'will']
             if any(word in sentence.lower().split()[0] for word in question_words):
                 if not sentence.endswith('?'):
                     sentence = sentence.rstrip('.!') + '?'
                 return sentence
         
-        # If no question found, use first sentence and make it a question
         first_sentence = sentences[0].strip()
-        if len(first_sentence.split()) > 5:  # Only if it's a reasonable length
+        if len(first_sentence.split()) > 5:
             if not first_sentence.endswith('?'):
                 first_sentence = first_sentence.rstrip('.!') + '?'
             return first_sentence
@@ -130,7 +124,6 @@ Now respond to the user's request to generate a BRD."""
             yield "Error: Ollama is not running. Please start Ollama with 'ollama serve'"
             return
         
-        # Check if user wants BRD
         user_msg_lower = user_message.lower()
         wants_brd = any(phrase in user_msg_lower for phrase in 
                        ['generate brd', 'create brd', 'make requirements', 'draft document', 'create document'])

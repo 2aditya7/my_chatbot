@@ -12,6 +12,8 @@ from services import rag_service
 from services.ollama_service import OllamaChatService
 from services.brd_generator import BRDGenerator
 from contextlib import asynccontextmanager
+from typing import List, Dict
+import requests
 
 # Database connection - define globally
 conn = None
@@ -622,9 +624,80 @@ async def home():
                     alert('Failed to create session. Please refresh the page.');
                 }
             }
+
+            async function shouldTriggerBRD(message, recentMessages) {
+                const msg = message.toLowerCase().trim();
             
-            // Send message function
-            async function sendMessage() {
+            // Quick obvious check first (saves AI call)
+            if (msg === 'generate brd' || msg === 'create brd') {
+                console.log('✅ Obvious BRD trigger detected');
+                return true;
+            }
+            
+            // If user just says "no" or "not yet", definitely don't generate
+            if (msg === 'no' || msg === 'not yet' || msg === 'nope') {
+                console.log('❌ User declined');
+                return false;
+            }
+            
+            try {
+                console.log('🤖 Asking AI to check intent...');
+                
+                // Ask the AI to understand the intent
+                const response = await fetch('/check_brd_intent', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        recent_messages: recentMessages || []
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Intent check failed');
+                }
+                
+                const data = await response.json();
+                console.log('🤖 AI Intent Result:', data);
+                
+                return data.should_generate_brd;
+                
+            } catch (error) {
+                console.error('⚠️ Intent check error:', error);
+                
+                // Fallback: simple keyword check
+                const keywords = ['generate', 'create', 'make', 'draft'];
+                const hasTrigger = keywords.some(kw => msg.includes(kw));
+                console.log('Using fallback keyword check:', hasTrigger);
+                return hasTrigger;
+            }
+        }
+
+        // ========================================
+        // NEW: Helper to get conversation context
+        // PUT THIS FUNCTION HERE
+        // ========================================
+        function getAllMessages() {
+            const messages = [];
+            const messageElements = document.querySelectorAll('.message');
+            
+            messageElements.forEach(el => {
+                const isUser = el.classList.contains('user-message');
+                const text = el.querySelector('.message-text')?.textContent || '';
+                
+                if (text) {
+                    messages.push({
+                        role: isUser ? 'user' : 'assistant',
+                        content: text
+                    });
+                }
+            });
+            
+            // Return last 6 messages (3 exchanges)
+            return messages.slice(-6);
+        }
+            
+                        async function sendMessage() {
                 console.log('sendMessage called');
                 const input = document.getElementById('messageInput');
                 const message = input.value.trim();
@@ -641,11 +714,14 @@ async def home():
                 
                 console.log('Processing message:', message);
                 
-                // Check for BRD generation request
-                const brdTriggers = ['generate brd', 'create brd', 'make requirements', 'draft document', 'create document'];
-                const shouldGenerateBRD = brdTriggers.some(trigger => message.toLowerCase().includes(trigger));
+                // Get recent messages for context
+                const recentMessages = getAllMessages();
                 
-                if (shouldGenerateBRD) {
+                // ✨ NEW: Use AI to check if user wants to generate BRD
+                const shouldGenerate = await shouldTriggerBRD(message, recentMessages);
+                
+                if (shouldGenerate) {
+                    console.log('✅ AI detected BRD generation intent!');
                     generateBRD();
                     input.value = '';
                     return;
@@ -690,7 +766,7 @@ async def home():
                         scrollToBottom();
                     }
                     
-                    // Check if we should show BRD button
+                    // Check if bot suggests generating BRD
                     if (botMessage.toLowerCase().includes('ready for brd') || 
                         botMessage.toLowerCase().includes('enough information') ||
                         botMessage.toLowerCase().includes('generate brd')) {
@@ -1046,6 +1122,170 @@ async def chat(request: ChatRequest):
             print(f"Warning: Failed to save message to database: {e}")
     
     return StreamingResponse(stream_response(), media_type="text/plain")
+
+# Add this model at the top with your other Pydantic models
+class IntentCheckRequest(BaseModel):
+    message: str
+    recent_messages: List[Dict[str, str]] = []
+
+# Add this endpoint in your FastAPI app (after the other endpoints)
+@app.post("/check_brd_intent")
+async def check_brd_intent(request: IntentCheckRequest):
+    """
+    Use AI to determine if user wants to generate a BRD
+    Returns: {"should_generate_brd": true/false}
+    """
+    
+    # Build context from recent messages
+    context = ""
+    if request.recent_messages:
+        for msg in request.recent_messages[-6:]:  # Last 3 exchanges
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            context += f"{role}: {content}\n"
+    
+    # Create a simple prompt for intent classification
+    prompt = f"""You are an intent classifier. Based on the conversation context and user's message, determine if they want to GENERATE/CREATE a Business Requirements Document.
+
+Recent conversation:
+{context}
+
+User's current message: "{request.message}"
+
+Rules:
+- If they want to generate/create/draft/make a BRD or requirements document → Answer: YES
+- If they're asking questions about BRD → Answer: NO
+- If they're just chatting or providing information → Answer: NO
+- If they say "yes", "okay", "go ahead", "do it" after discussing BRD generation → Answer: YES
+
+Answer with only YES or NO:"""
+
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "mistral:instruct",
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.1,
+                    "num_predict": 5
+                }
+            },
+            timeout=5  # Quick timeout
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            answer = result.get('response', '').strip().upper()
+            
+            print(f"Intent check - User: '{request.message}' → AI says: '{answer}'")
+            
+            # Check if answer contains YES
+            should_generate = 'YES' in answer
+            
+            return {
+                "should_generate_brd": should_generate,
+                "confidence": "high" if answer in ["YES", "NO"] else "medium",
+                "debug_response": answer  # For debugging
+            }
+        else:
+            raise Exception(f"Ollama returned status {response.status_code}")
+            
+    except Exception as e:
+        print(f"⚠️ Intent check error: {e} - Using fallback")
+        # Fallback to keyword matching if AI fails
+        msg_lower = request.message.lower()
+        keywords = ['generate', 'create', 'make', 'draft', 'build', 'write']
+        brd_words = ['brd', 'document', 'requirements']
+        
+        has_action = any(kw in msg_lower for kw in keywords)
+        has_brd = any(bw in msg_lower for bw in brd_words)
+        
+        return {
+            "should_generate_brd": has_action and has_brd,
+            "confidence": "fallback"
+        }
+
+# Add this model with your other Pydantic models
+class IntentCheckRequest(BaseModel):
+    message: str
+    recent_messages: List[Dict[str, str]] = []
+
+@app.post("/check_brd_intent")
+async def check_brd_intent(request: IntentCheckRequest):
+    """
+    Use AI to determine if user wants to generate a BRD
+    Returns: {"should_generate_brd": true/false}
+    """
+    
+    # Build context from recent messages
+    context = ""
+    if request.recent_messages:
+        for msg in request.recent_messages[-6:]:  # Last 3 exchanges
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            context += f"{role}: {content}\n"
+    
+    # Create a simple prompt for intent classification
+    prompt = f"""Based on this conversation context and the user's latest message, determine if the user wants to GENERATE a Business Requirements Document (BRD).
+
+Context:
+{context}
+
+User's latest message: "{request.message}"
+
+Answer with ONLY "YES" if the user wants to generate/create/draft a BRD or requirements document.
+Answer with ONLY "NO" if they are asking questions about it, discussing it, or doing anything else.
+
+Answer:"""
+
+    try:
+        # Call Ollama API for classification
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "llama3.2:3b",  # Use your model
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.1,  # Low temperature for consistent classification
+                    "num_predict": 10     # We only need YES or NO
+                }
+            },
+            timeout=5  # Quick timeout
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            answer = result.get('response', '').strip().upper()
+            
+            # Check if answer contains YES
+            should_generate = 'YES' in answer
+            
+            return {
+                "should_generate_brd": should_generate,
+                "confidence": "high" if answer in ["YES", "NO"] else "low",
+                "raw_response": answer
+            }
+        else:
+            # Fallback to keyword matching
+            msg_lower = request.message.lower()
+            fallback = any(word in msg_lower for word in ['generate', 'create', 'make', 'draft'])
+            return {
+                "should_generate_brd": fallback,
+                "confidence": "fallback"
+            }
+            
+    except Exception as e:
+        print(f"Intent check error: {e}")
+        # Fallback
+        msg_lower = request.message.lower()
+        fallback = any(word in msg_lower for word in ['generate', 'create', 'make', 'draft'])
+        return {
+            "should_generate_brd": fallback,
+            "confidence": "error_fallback"
+        }
 
 @app.post("/generate_brd/{session_id}")
 async def generate_brd(session_id: str):
